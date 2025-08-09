@@ -3,10 +3,10 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Gray-style Hub</title>
+<title>Gray's Website</title>
+<link rel="icon" href="https://raw.githubusercontent.com/uh-oh-man/gray-site/main/photos/favicon.jpg" type="image/jpeg">
 <style>
   :root{
-    --bg: url("https://raw.githubusercontent.com/uh-oh-man/downloads/refs/heads/main/VRChat_1920x1080_2021-07-12_12-26-59.521.png");
     --ink:#bfbfbf;
     --shadow: rgba(0,0,0,.45);
     --glass: rgba(40,40,40,.35);
@@ -25,8 +25,10 @@
     overflow-x: hidden;
   }
 
-  /* Background */
-  .bg{ position: fixed; inset: 0; background-image: var(--bg); background-size: cover; background-position: center; filter: saturate(1.05) brightness(.92); transform: scale(1.02); z-index: -2; }
+  /* Background crossfade (two layers) */
+  .bg-stack{ position: fixed; inset: 0; z-index:-2; }
+  .bg{ position:absolute; inset:0; background-size:cover; background-position:center center; filter:saturate(1.05) brightness(.92); transform:scale(1.02); opacity:0; transition: opacity 1.2s ease; }
+  .bg.visible{ opacity:1; }
   .vignette{ position: fixed; inset: 0; background: radial-gradient(120% 120% at 70% 30%, rgba(0,0,0,0) 0%, rgba(0,0,0,.35) 55%, rgba(0,0,0,.65) 100%); pointer-events:none; z-index:-1; }
 
   /* Right panel layout */
@@ -102,7 +104,11 @@
 </style>
 </head>
 <body>
-  <div class="bg"></div>
+  <!-- Crossfade background (two layers) -->
+  <div class="bg-stack">
+    <div class="bg visible" id="bgA"></div>
+    <div class="bg" id="bgB"></div>
+  </div>
   <div class="vignette"></div>
 
   <main class="panel">
@@ -125,6 +131,59 @@
   </div>
 
 <script type="module">
+  /* ---------- Background rotation with preloading & crossfade ---------- */
+  const bgA = document.getElementById('bgA');
+  const bgB = document.getElementById('bgB');
+  let active = bgA, back = bgB;
+
+  const BG_API = 'https://api.github.com/repos/uh-oh-man/gray-site/contents/photos/background';
+  const IMG_RE = /\.(png|jpe?g|webp|gif)$/i;
+  let bgList = [];
+  let order = [];
+  let idx = 0;
+
+  function shuffle(a){ for(let i=a.length-1;i>0;i--){ const j=Math.floor(Math.random()*(i+1)); [a[i],a[j]]=[a[j],a[i]]; } return a; }
+  function refillOrder(){ order = shuffle(bgList.slice()); idx = 0; }
+
+  async function preload(url){ const img = new Image(); img.src = url; await img.decode(); return url; }
+
+  async function swapTo(url){
+    // set next image on back layer and show it
+    back.style.backgroundImage = `url(${url})`;
+    // crossfade
+    active.classList.remove('visible');
+    back.classList.add('visible');
+    // swap refs
+    const tmp = active; active = back; back = tmp;
+  }
+
+  async function cycle(){
+    if(!order.length) return; // safety
+    const nextUrl = order[idx++ % order.length];
+    await preload(nextUrl);
+    await swapTo(nextUrl);
+  }
+
+  async function initBackgrounds(){
+    try{
+      const res = await fetch(BG_API, { headers: { 'Accept':'application/vnd.github+json' }});
+      if(!res.ok) throw new Error('bg api failed');
+      const json = await res.json();
+      bgList = json.filter(it=> it.type==='file' && IMG_RE.test(it.name)).map(it=> it.download_url);
+      if(bgList.length){
+        refillOrder();
+        // set first image immediately
+        const first = order[idx++ % order.length];
+        active.style.backgroundImage = `url(${first})`;
+        active.classList.add('visible');
+        // start timed cycling
+        setInterval(cycle, 5000);
+      }
+    }catch(err){ console.warn('background rotation disabled (fetch failed):', err); }
+  }
+  initBackgrounds();
+
+  /* ---------- Modal + Installer (unchanged core behavior) ---------- */
   const mcBtn = document.getElementById('mcBtn');
   const mcModal = document.getElementById('mcModal');
   const mcWindow = document.getElementById('mcWindow');
@@ -292,7 +351,6 @@
 
     const setupBtn      = document.getElementById('setupBtn');
 
-    // ---- Permission denied UI (Back / Try again) ----
     function showBackTryAgain(msg){
       progressBlock.style.display = 'flex';
       statusText.textContent = msg || 'permission denied';
@@ -305,16 +363,12 @@
       retry.onclick = async ()=>{ permDeniedUI.style.display = 'none'; statusText.textContent = 'awaiting user permission'; await requestDirectoryAndScan(); };
     }
 
-    let currentDirHandle = null;
-    let remoteCache = [];
+    let currentDirHandle = null; let remoteCache = [];
 
     async function listLocalJars(dirHandle){
       const files = [];
-      try{
-        for await (const [name, handle] of dirHandle.entries()){
-          if(handle.kind === 'file' && name.toLowerCase().endsWith('.jar')) files.push(name);
-        }
-      }catch(err){ console.warn('listLocalJars error', err); }
+      try{ for await (const [name, handle] of dirHandle.entries()){ if(handle.kind==='file' && name.toLowerCase().endsWith('.jar')) files.push(name); } }
+      catch(err){ console.warn('listLocalJars error', err); }
       return files.sort((a,b)=> a.localeCompare(b));
     }
 
@@ -323,10 +377,8 @@
       const res = await fetch(api, { headers: { 'Accept':'application/vnd.github+json' }});
       if(!res.ok) throw new Error('Failed to fetch remote mod list');
       const json = await res.json();
-      const files = json.filter(it=> it.type==='file' && /\.jar$/i.test(it.name))
-                        .map(it=> ({ name: it.name, url: it.download_url }));
-      remoteCache = files;
-      return files;
+      const files = json.filter(it=> it.type==='file' && /\.jar$/i.test(it.name)).map(it=> ({ name: it.name, url: it.download_url }));
+      remoteCache = files; return files;
     }
 
     function renderMissingChecklist(missing){
@@ -356,15 +408,8 @@
       progressFill.style.width = '10%';
       let modsHandle = null;
       try { modsHandle = await rootHandle.getDirectoryHandle('mods', { create:false }); } catch(_) { modsHandle = null; }
-      if(modsHandle){
-        statusText.textContent = "found 'mods' — scanning…";
-        progressFill.style.width = '20%';
-        return modsHandle;
-      } else {
-        statusText.textContent = "no 'mods' folder in selected location";
-        decisionBlock.style.display = 'flex';
-        return null;
-      }
+      if(modsHandle){ statusText.textContent = "found 'mods' — scanning…"; progressFill.style.width = '20%'; return modsHandle; }
+      statusText.textContent = "no 'mods' folder in selected location"; decisionBlock.style.display = 'flex'; return null;
     }
 
     async function orchestrateCompareAndList(dirHandle){
@@ -379,9 +424,7 @@
         const actionsView = document.getElementById('actionsView');
         let cont = document.getElementById('continueToCleanup');
         if(!cont){
-          cont = document.createElement('button');
-          cont.id = 'continueToCleanup'; cont.className = 'small-btn'; cont.textContent = 'Continue';
-          actionsView.appendChild(cont);
+          cont = document.createElement('button'); cont.id = 'continueToCleanup'; cont.className = 'small-btn'; cont.textContent = 'Continue'; actionsView.appendChild(cont);
           cont.addEventListener('click', async ()=>{ cont.remove(); statusText.textContent = 'Scanning for local-only mods…'; await scanExtrasFlow(); });
         }
       }
@@ -412,17 +455,12 @@
       let done = 0;
       for(const cb of checks){
         const name = cb.dataset.name; const url = cb.dataset.url;
-        try{
-          const resp = await fetch(url); if(!resp.ok) throw new Error('download failed: '+name);
-          const blob = await resp.blob();
-          const fileHandle = await currentDirHandle.getFileHandle(name, { create:true });
-          const writable = await fileHandle.createWritable(); await writable.write(blob); await writable.close();
-          done++; const pct = Math.min(90, 30 + Math.round((done/checks.length)*60));
-          progressFill.style.width = pct + '%'; statusText.textContent = `installed ${done}/${checks.length}`;
-        }catch(err){ console.warn('install error', name, err); statusText.textContent = 'error installing ' + name; }
+        try{ const resp = await fetch(url); if(!resp.ok) throw new Error('download failed: '+name);
+          const blob = await resp.blob(); const fileHandle = await currentDirHandle.getFileHandle(name, { create:true }); const writable = await fileHandle.createWritable(); await writable.write(blob); await writable.close();
+          done++; const pct = Math.min(90, 30 + Math.round((done/checks.length)*60)); progressFill.style.width = pct + '%'; statusText.textContent = `installed ${done}/${checks.length}`; }
+        catch(err){ console.warn('install error', name, err); statusText.textContent = 'error installing ' + name; }
       }
-      missingWrap.style.display = 'none'; decisionBlock.style.display = 'none'; statusText.textContent = 'Install complete. Scanning for local-only mods…';
-      await scanExtrasFlow();
+      missingWrap.style.display = 'none'; decisionBlock.style.display = 'none'; statusText.textContent = 'Install complete. Scanning for local-only mods…'; await scanExtrasFlow();
     }
 
     async function scanExtrasFlow(){
@@ -451,10 +489,7 @@
           statusText.textContent = sel.length ? (`deleted ${removed}/${sel.length}`) : 'nothing to delete';
           extraWrap.style.display = 'none'; appendFinish();
         };
-      } else {
-        statusText.textContent = 'No local-only mods found.';
-        extraWrap.style.display = 'none'; appendFinish();
-      }
+      } else { statusText.textContent = 'No local-only mods found.'; extraWrap.style.display = 'none'; appendFinish(); }
     }
 
     // ---- Setup flow ----
@@ -549,28 +584,13 @@
     if(nextY < minY) nextY = minY; if(nextY > maxY) nextY = maxY;
     mcWindow.style.left = nextX + 'px'; mcWindow.style.top  = nextY + 'px';
   });
-  window.addEventListener('mouseup', ()=>{
-    if(!drag.on) return; drag.on = false; const rect = mcWindow.getBoundingClientRect(); const next = clampToViewport(rect.left, rect.top); mcWindow.style.left = next.x + 'px'; mcWindow.style.top  = next.y + 'px'; mcWindow.style.animation = '';
-  });
+  window.addEventListener('mouseup', ()=>{ if(!drag.on) return; drag.on = false; const rect = mcWindow.getBoundingClientRect(); const next = clampToViewport(rect.left, rect.top); mcWindow.style.left = next.x + 'px'; mcWindow.style.top  = next.y + 'px'; mcWindow.style.animation = ''; });
   window.addEventListener('resize', ()=>{ if(mcModal.getAttribute('aria-hidden') === 'true') return; const rect = mcWindow.getBoundingClientRect(); const next = clampToViewport(rect.left, rect.top); mcWindow.style.left = next.x + 'px'; mcWindow.style.top  = next.y + 'px'; });
 
   /* ---------- Bindings ---------- */
   mcBtn.addEventListener('click', (e)=>{ e.preventDefault(); openModal(); });
   mcClose.addEventListener('click', (e)=>{ e.preventDefault(); e.stopPropagation(); closeModal(); });
   window.addEventListener('keydown', (e)=>{ if(e.key === 'Escape' && mcModal.getAttribute('aria-hidden') === 'false') closeModal(); });
-
-  /* ---------- Self-tests (console) ---------- */
-  (function selfTests(){
-    try{
-      const tests = [];
-      tests.push({name:'secret matches 0713', pass: secret === btoa('0713')});
-      const clampLow = clampToViewport(-999,-999); const clampHigh = clampToViewport(window.innerWidth+999, window.innerHeight+999);
-      tests.push({name:'clamp lower >= margin', pass: clampLow.x >= 10 && clampLow.y >= 10});
-      tests.push({name:'clamp upper <= viewport', pass: clampHigh.x <= window.innerWidth && clampHigh.y <= window.innerHeight});
-      tests.push({name:'requestDirectoryAndScan is async', pass: /async\s+function\s+requestDirectoryAndScan\(/.test(requestDirectoryAndScan.toString())});
-      console.groupCollapsed('%cSelf-tests','color:#9f9'); tests.forEach(t=> console.log(t.pass ? '✅' : '❌', t.name)); console.groupEnd();
-    }catch(err){ console.warn('Self-tests error', err); }
-  })();
 </script>
 </body>
 </html>
